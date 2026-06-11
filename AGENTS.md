@@ -32,9 +32,13 @@ Official APIs only. Adzuna, Remotive, RemoteOK, Arbeitnow, and Hacker News "Who 
 - Turso token stays server-side only (runtimeConfig, never exposed to the client).
 - Server routes whitelist sortable/filterable column names — no raw query string interpolation.
 
+## Infrastructure
+
+All services run on an Oracle Cloud Always Free A1.Flex VM (4 OCPU, 24 GB RAM, ARM). The VM is stateless — databases stay on Turso, file storage on Cloudflare R2. Cloudflare Tunnel exposes the VM to the internet without open ports or a public IP. Services: n8n, Kratos (auth), Meilisearch, Redis, Caddy (reverse proxy).
+
 ## n8n pipeline
 
-Defined in `docs/` and deployed separately (Oracle Cloud Always Free or Hetzner). The Nuxt app is read-only; n8n writes to Turso over the HTTP pipeline API.
+Defined in `docs/` and deployed on the Oracle VM. The Nuxt app is read-only; n8n writes to Turso over the HTTP pipeline API.
 
 ## Normalization engine
 
