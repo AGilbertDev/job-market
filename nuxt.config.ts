@@ -10,8 +10,7 @@ export default defineNuxtConfig({
     locales: [
       { code: 'fr', name: 'Français (Québec)', file: 'fr.json' },
       { code: 'en', name: 'English', file: 'en.json' }
-    ],
-    langDir: 'locales'
+    ]
   },
 
   runtimeConfig: {
