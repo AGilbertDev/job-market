@@ -1,0 +1,61 @@
+const SKILL_DICTIONARY: string[] = [
+  'react',
+  'vue',
+  'angular',
+  'svelte',
+  'nuxt',
+  'next.js',
+  'typescript',
+  'javascript',
+  'python',
+  'go',
+  'rust',
+  'java',
+  'kotlin',
+  'swift',
+  'ruby',
+  'php',
+  'node.js',
+  'bun',
+  'deno',
+  'graphql',
+  'rest',
+  'grpc',
+  'postgresql',
+  'mysql',
+  'sqlite',
+  'mongodb',
+  'redis',
+  'elasticsearch',
+  'kafka',
+  'rabbitmq',
+  'docker',
+  'kubernetes',
+  'k8s',
+  'terraform',
+  'aws',
+  'gcp',
+  'azure',
+  'linux',
+  'git',
+  'ci/cd',
+  'github actions',
+  'tailwind',
+  'css',
+  'html',
+  'webassembly',
+  'llm',
+  'openai',
+  'langchain',
+  'pytorch',
+  'tensorflow'
+]
+
+const PATTERNS = SKILL_DICTIONARY.map((s) => ({
+  tag: s,
+  pattern: new RegExp(`\\b${s.replace('.', '\\.').replace('/', '\\/')}\\b`, 'i')
+}))
+
+export function extractTags(text: string): string[] {
+  return PATTERNS.filter(({ pattern }) => pattern.test(text)).map(({ tag }) => tag)
+}
