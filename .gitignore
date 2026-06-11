@@ -26,3 +26,5 @@ logs
 # Agent skills (downloaded, re-installable from .recipes)
 .claude/skills/
 skills-lock.json
+.vercel
+.claude/agents/
