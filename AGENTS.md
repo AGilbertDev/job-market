@@ -34,11 +34,11 @@ Official APIs only. Adzuna, Remotive, RemoteOK, Arbeitnow, and Hacker News "Who 
 
 ## Infrastructure
 
-All services run on an Oracle Cloud Always Free A1.Flex VM (4 OCPU, 24 GB RAM, ARM). The VM is stateless — databases stay on Turso, file storage on Cloudflare R2. Cloudflare Tunnel exposes the VM to the internet without open ports or a public IP. Services: n8n, Kratos (auth), Meilisearch, Redis, Caddy (reverse proxy).
+All services run on an Oracle Cloud Always Free A1.Flex VM (4 OCPU, 24 GB RAM, ARM) at `147.15.135.73`. The VM is stateless — databases stay on Turso, file storage on Cloudflare R2. DNS is on Namecheap; subdomains (`n8n.agilbert.dev`, `cloud.agilbert.dev`) all point to the same IP. Caddy runs as a reverse proxy and handles HTTPS. Services run as Docker containers with `restart: always` so they recover automatically on crash or reboot. Firewall rules are persisted with `iptables-persistent` so they survive reboots. Portainer runs at `cloud.agilbert.dev:9000` for container management.
 
 ## n8n pipeline
 
-Defined in `docs/` and deployed on the Oracle VM. The Nuxt app is read-only; n8n writes to Turso over the HTTP pipeline API.
+Deployed on the Oracle VM at `https://n8n.agilbert.dev`. The Nuxt app is read-only; n8n writes to Turso over the HTTP pipeline API. Workflows are version-controlled in a separate `AGilbertDev/n8n-workflows` GitHub repo, connected via n8n's built-in Git integration.
 
 ## Normalization engine
 
