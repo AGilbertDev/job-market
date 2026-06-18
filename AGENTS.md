@@ -1,6 +1,6 @@
 # job-market
 
-A self-updating aggregator of developer salary and job-market data. An n8n workflow pulls from several free official job APIs on a weekly schedule, normalizes the data, and upserts it into a Turso (libSQL) database. A Nuxt app renders the current dataset in a server-side filterable and sortable datatable, plus a market-health summary derived from weekly snapshots. Solo project.
+A self-updating aggregator of developer salary and job-market data. A scheduled server route, triggered weekly by Vercel Cron, pulls from several free official job APIs, normalizes the data, and upserts it into a Turso (libSQL) database. A Nuxt app renders the current dataset in a server-side filterable and sortable datatable, plus a market-health summary derived from weekly snapshots. Solo project.
 
 ## Conventions and skills
 
@@ -31,14 +31,15 @@ Official APIs only. Adzuna, Remotive, RemoteOK, Arbeitnow, and Hacker News "Who 
 - Weekly snapshots table stores pre-aggregated payload JSON to keep dashboard reads cheap.
 - Turso token stays server-side only (runtimeConfig, never exposed to the client).
 - Server routes whitelist sortable/filterable column names — no raw query string interpolation.
+- Ingest runs in-app as a Vercel Cron-triggered server route, not a separate service. One codebase owns the fetch, the normalization, and the writes.
 
-## Infrastructure
+## Deployment
 
-All services run on an Oracle Cloud Always Free A1.Flex VM (4 OCPU, 24 GB RAM, ARM) at `147.15.135.73`. The VM is stateless — databases stay on Turso, file storage on Cloudflare R2. DNS is on Namecheap; subdomains (`n8n.agilbert.dev`, `cloud.agilbert.dev`) all point to the same IP. Caddy runs as a reverse proxy and handles HTTPS. Services run as Docker containers with `restart: always` so they recover automatically on crash or reboot. Firewall rules are persisted with `iptables-persistent` so they survive reboots. Portainer runs at `cloud.agilbert.dev:9000` for container management.
+The Nuxt app and the scheduled ingest deploy together to Vercel as one project. There is no separate server or automation service to run. Turso holds the database, Cloudflare R2 holds any file storage, and Resend sends the weekly digest. The personal infra VM that earlier hosted this project's automation is documented in the private `AGilbertDev/infra-setup-guide` repo and is no longer part of this project.
 
-## n8n pipeline
+## Scheduled ingest
 
-Deployed on the Oracle VM at `https://n8n.agilbert.dev`. The Nuxt app is read-only; n8n writes to Turso over the HTTP pipeline API. Workflows are version-controlled in a separate `AGilbertDev/n8n-workflows` GitHub repo, connected via n8n's built-in Git integration.
+A protected Nitro server route (`/api/ingest`) fetches the sources, normalizes them with the engine in `server/utils/normalize/`, and upserts into Turso via Drizzle. Vercel Cron triggers it weekly. The route checks a `CRON_SECRET` bearer header so only the cron can run it, never a visitor. Sources are fetched with per-source error isolation (`Promise.allSettled`) so one failing source does not abort the rest. The same run computes the weekly snapshot and sends the Resend digest. Full detail is in `docs/dev-market-aggregator-spec.md` §5.
 
 ## Normalization engine
 

@@ -1,15 +1,17 @@
 # Dev Salaries & Job-Market-Health Aggregator — Technical Spec
 
-**Version:** 0.1
-**Date:** 2026-06-11
+**Version:** 0.2
+**Date:** 2026-06-18
 **Author:** Alex
 **Status:** Draft for implementation
+
+> **Changes in 0.2.** Removed n8n. The weekly ingest is now an in-app server route triggered by Vercel Cron, reusing the existing normalization engine. The project is a cron plus cached-data job, not an orchestration job, so the separate automation service added cost without adding capability. The database stays, since the weekly snapshots are historical time-series data that no live fetch can reconstruct.
 
 ---
 
 ## 1. Summary
 
-A self-updating aggregator of developer salary and job-market data. An **n8n** workflow pulls from several free, official job APIs on a weekly schedule, normalizes the data, and upserts it into a **Turso** (libSQL) database. A **Nuxt** app renders the current dataset in a server-side filterable/sortable datatable, plus a market-health summary derived from weekly snapshots. A weekly email digest goes out from the same n8n run.
+A self-updating aggregator of developer salary and job-market data. A scheduled server route, triggered weekly by **Vercel Cron**, pulls from several free, official job APIs, normalizes the data, and upserts it into a **Turso** (libSQL) database. A **Nuxt** app renders the current dataset in a server-side filterable/sortable datatable, plus a market-health summary derived from weekly snapshots. A weekly email digest goes out from the same scheduled run.
 
 Primary purpose: a **portfolio showcase** demonstrating multi-source ETL, a title/salary normalization engine, an automated pipeline, an edge database, and a performant filterable UI.
 
@@ -118,40 +120,33 @@ create table snapshots (
 
 ---
 
-## 5. n8n pipeline
+## 5. Scheduled ingest pipeline
 
-**Trigger:** Schedule node — weekly (e.g. Monday 06:00 America/Toronto).
+The ingest is an in-app job, not a separate service. It lives inside the Nuxt app as a protected Nitro server route and runs on a schedule with Vercel Cron. This keeps the fetch, the normalization engine (§6), and the database writes in one codebase with one source of truth.
 
-**Flow (per source, then merge):**
-1. **HTTP Request** node → fetch source (with pagination loop where needed).
-2. **Code** node → normalize each record into the `job_postings` shape (see §6).
-3. **Merge** all sources into one item stream; dedup by computed `id`.
-4. **Upsert to Turso** — see §5.1.
-5. **Compute snapshot** — run aggregation SQL against Turso (or compute in a Code node), then upsert the weekly `snapshots` row.
-6. **Email** node (Resend or SMTP) → send the weekly digest built from the snapshot payload.
-7. **Error workflow** → on failure, notify (email/Slack) and do not partially commit (batch writes).
-
-### 5.1 How n8n writes to Turso
-Turso/libSQL exposes an **HTTP API**. From an n8n **HTTP Request** node:
-
-- **URL:** `https://<your-db>.turso.io/v2/pipeline`
-- **Method:** POST
-- **Header:** `Authorization: Bearer <TURSO_TOKEN>`
-- **Body:** JSON with a list of statements, e.g.:
+**Trigger:** A Vercel Cron entry hits the ingest route weekly (e.g. Monday 06:00). Define it in `vercel.json` (or `vercel.ts`):
 
 ```json
 {
-  "requests": [
-    { "type": "execute", "stmt": {
-        "sql": "insert into job_postings (id, source, source_id, source_url, title, role, seniority, company, country, region, city, work_mode, salary_min, salary_max, salary_currency, salary_period, salary_is_estimated, tags, posted_at, last_seen_at, is_active) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'), 1) on conflict(id) do update set last_seen_at = datetime('now'), salary_min = excluded.salary_min, salary_max = excluded.salary_max, is_active = 1",
-        "args": [ /* typed params */ ]
-    }},
-    { "type": "close" }
+  "crons": [
+    { "path": "/api/ingest", "schedule": "0 6 * * 1" }
   ]
 }
 ```
 
-Batch many statements per request to stay within rate/quotas. Keep writes parameterized.
+**Route protection:** The ingest route must only run for the cron, never for a random visitor. Vercel sends cron requests with an `Authorization: Bearer <CRON_SECRET>` header when the `CRON_SECRET` env var is set. The route verifies that header server-side and returns 401 otherwise. The secret lives in `runtimeConfig` and is never exposed to the client.
+
+**Flow (inside the route):**
+1. **Fetch each source** with pagination where needed. Wrap each source in its own handler and run them with `Promise.allSettled`, so one source being down does not abort the others. Add a small retry with backoff for transient network failures.
+2. **Normalize** each record into the `job_postings` shape using the existing engine in `server/utils/normalize/` (see §6). This is the single source of truth for transforms. Do not reimplement normalization anywhere else.
+3. **Merge** all sources into one stream; dedup by the computed `id`.
+4. **Upsert to Turso** via Drizzle, batched. See §5.1.
+5. **Compute the snapshot** — run the weekly aggregation, then upsert the `snapshots` row.
+6. **Send the digest** — either inline after a successful upsert, or by triggering the email step (see §8).
+7. **On failure** — log which sources failed and optionally notify by email. Per-source isolation means a partial run still commits the sources that succeeded, which is the right behavior for a weekly refresh.
+
+### 5.1 How the ingest writes to Turso
+Writes go through **Drizzle ORM** on top of `@libsql/client`, the same client the read routes use (§7.1). No separate HTTP "pipeline API" is needed, since that only existed so an external tool could reach Turso. Upserts use `onConflictDoUpdate` keyed on the `id` hash, updating `last_seen_at`, salary fields, and `is_active`. Batch the statements to stay within rate and quota limits. Drizzle parameterizes every write.
 
 ---
 
@@ -194,8 +189,8 @@ This is where most of the portfolio value lives. Raw feeds are messy; the value 
 ---
 
 ## 8. Email digest
-- Sent weekly from the n8n run after the snapshot is written.
-- Provider: **Resend** (free tier) or SMTP via n8n.
+- Sent weekly from the scheduled ingest run after the snapshot is written, either inline in the ingest route or from a dedicated email step.
+- Provider: **Resend** (free tier).
 - Content: top-line KPIs, biggest week-over-week movers, median salary by role/region, remote share. Built from the `snapshots.payload`.
 - Stretch: a subscribe form (store emails in a `subscribers` table) → real recipient list.
 
@@ -205,11 +200,12 @@ This is where most of the portfolio value lives. Raw feeds are messy; the value 
 
 | Component | Where | Cost |
 |---|---|---|
-| n8n | Oracle Cloud **Always Free** ARM (Ampere A1) — or a ~€4/mo Hetzner box for reliability | Free / ~€4 |
+| Nuxt app + scheduled ingest | Vercel free tier. The app and the cron-triggered ingest route deploy together as one project, so there is no separate server to run or pay for. | Free |
 | Turso | Free tier (verify current quotas) | Free |
-| Nuxt | Cloudflare Pages or Vercel free tier (Nitro edge preset, reads Turso over HTTP) | Free |
 | Email | Resend free tier | Free |
 | Domain | Optional; DuckDNS subdomain works for free | Free / ~$12/yr |
+
+The ingest route does real work (network fetches, normalization) and needs Node, so the app uses the standard Vercel Nitro preset on Fluid Compute, not the edge preset. The default 300s function timeout leaves ample headroom for the weekly fetch across all sources. Removing n8n means this project no longer needs anything on the Oracle Cloud VM.
 
 ---
 
@@ -225,8 +221,8 @@ This is where most of the portfolio value lives. Raw feeds are messy; the value 
 
 1. **Schema + Turso setup** — create tables/indexes; verify HTTP API writes.
 2. **Normalization engine** — title/seniority/salary/work_mode/region parsers + Vitest fixtures per source.
-3. **n8n pipeline (1 source)** — Adzuna end-to-end: fetch → normalize → upsert.
-4. **n8n pipeline (all sources)** — add Remotive, RemoteOK, Arbeitnow, HN; merge + dedup.
+3. **Ingest route (1 source)** — protected `/api/ingest` with Vercel Cron + `CRON_SECRET`; Adzuna end-to-end: fetch → normalize → upsert.
+4. **Ingest route (all sources)** — add Remotive, RemoteOK, Arbeitnow, HN; per-source isolation with `Promise.allSettled`; merge + dedup.
 5. **Snapshot computation** — weekly aggregates + `snapshots` upsert.
 6. **Nuxt API routes** — `/api/jobs`, `/api/facets`, `/api/snapshots/latest` with caching + param whitelisting.
 7. **Datatable UI** — server-side filter/sort/paginate + dashboard charts.
@@ -244,3 +240,4 @@ This is where most of the portfolio value lives. Raw feeds are messy; the value 
 - Geographic focus: global, North America, or Canada-first? Affects which sources to weight.
 - Display currency: convert everything to one currency at read-time, or show native + a normalized USD/CAD column?
 - Retention: keep inactive postings for historical trend depth, or prune after N months?
+- Vercel free-tier cron: confirm the weekly schedule is allowed and runs reliably on the current Hobby plan limits, and that the full multi-source fetch fits inside the function timeout. If the free tier proves too restrictive, fall back to a VM cron that curls the same protected route.
